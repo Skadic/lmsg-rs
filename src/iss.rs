@@ -1,11 +1,12 @@
 use std::{
+    num::Wrapping,
     ops::{Index, IndexMut},
     time::Instant,
 };
 
 use num::{Integer, NumCast, ToPrimitive, Unsigned};
 use succinct::{
-    rank::BitRankSupport, BitVec, BitVecMut, BitVector, Rank9, IntVec,
+    rank::BitRankSupport, BitVec, BitVecMut, BitVector, IntVec, IntVecMut, IntVector, Rank9,
 };
 
 pub struct LS(BitVector<usize>, usize);
@@ -69,7 +70,7 @@ impl LS {
     }
 }
 
-pub fn iss<I>(s: &[I])
+pub fn iss<I>(s: &[I]) -> Vec<usize>
 where
     I: Unsigned + Integer + NumCast + Copy,
 {
@@ -83,8 +84,9 @@ where
 
     // naive sort ting
     let lms_pos: Vec<usize> = lms_sort(s, &ls, symbol_cnt);
-}
 
+    lms_pos
+}
 
 fn naive_lms_sort<I>(s: &[I], ls: &LS) -> Vec<usize>
 where
@@ -105,9 +107,10 @@ fn lms_sort<I>(s: &[I], ls: &LS, symbol_cnt: usize) -> Vec<usize>
 where
     I: Unsigned + Integer + ToPrimitive + Copy,
 {
-    //let size_bits = f64::log2(s.len() as f64 - 1.0).ceil() as usize;
+    let size_bits = f64::log2(s.len() as f64 - 1.0).ceil() as usize;
     //let alphabet_bits = f64::log2(symbol_cnt as f64 - 1.0).ceil() as usize;
-    let mut bucket_store = vec![usize::MAX; s.len()];
+    let invalid = !(usize::MAX << size_bits);
+    let mut bucket_store = IntVector::<usize>::with_fill(size_bits, s.len() as u64, invalid); //vec![usize::MAX; s.len()];
 
     // Calculate the buckets for the chars in the alphabet
     // The bitvector has a 1 at each index for which there is a nonzero-sized bucket. It also uses a rankDS (Vigna 2020)
@@ -140,21 +143,21 @@ where
         for &pos in lms_pos.iter().rev() {
             let c = s[pos].to_u64().unwrap();
             let c_pos = existing_chars.rank1(c) as usize - 1;
-            bucket_store[bucket_end[c_pos] - 1] = pos;
+            bucket_store.set(bucket_end[c_pos] as u64 - 1, pos);
             bucket_end[c_pos] -= 1;
         }
     }
 
     // Schritt a: Durchlaufe von links nach rechts. Wenn bucket_store[r] - 1 eine L position ist, schreibe die Position an die erste freie Position in ihrem Bucket
     for r in 0..bucket_store.len() {
-        if bucket_store[r] == usize::MAX || bucket_store[r] == 0 {
+        if bucket_store.get(r) == invalid || bucket_store.get(r) == 0 {
             continue;
         }
-        let pos = bucket_store[r] - 1;
+        let pos = bucket_store.get(r) - 1;
         if ls.is_l(pos) {
             let c = s[pos].to_u64().unwrap();
             let c_pos = existing_chars.rank1(c) as usize - 1;
-            bucket_store[bucket_start[c_pos]] = pos;
+            bucket_store.set(bucket_start[c_pos] as u64, pos);
             bucket_start[c_pos] += 1;
         }
     }
@@ -162,14 +165,14 @@ where
 
     //Schritt b: Durchlaufe von rechts nach links: Wenn bucket_store[r] - 1 eine S position ist, trage sie in ihrem Bucket ein
     for r in (0..bucket_store.len()).rev() {
-        if bucket_store[r] == 0 {
+        if bucket_store.get(r) == 0 {
             continue;
         }
-        let pos = bucket_store[r] - 1;
+        let pos = bucket_store.get(r) - 1;
         if ls.is_s(pos) {
             let c = s[pos].to_u64().unwrap();
             let c_pos = existing_chars.rank1(c) as usize - 1;
-            bucket_store[bucket_end[c_pos] - 1] = pos;
+            bucket_store.set(bucket_end[c_pos] as u64 - 1, pos);
             bucket_end[c_pos] -= 1;
         }
     }
