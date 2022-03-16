@@ -20,6 +20,10 @@ impl LS {
         Self(Self::calc_ls(s), s.len())
     }
 
+    pub fn inner(&self) -> &BitVector<usize> {
+        &self.0
+    }
+
     #[inline(always)]
     pub fn is_l(&self, i: usize) -> bool {
         self.0.get_bit(i as u64)
@@ -27,6 +31,10 @@ impl LS {
 
     #[inline(always)]
     pub fn is_s(&self, i: usize) -> bool {
+        if i > self.0.bit_len() as usize {
+            dbg!(i);
+            dbg!(self.0.bit_len());
+        }
         !self.0.get_bit(i as u64)
     }
 
@@ -34,7 +42,17 @@ impl LS {
         if i == 0 {
             return false;
         }
+        //println!("ls[{}]: {}, ls[{}]: {}, so: {}", i-1, self.0.get_bit(i as u64 - 1), i, self.0.get_bit(i as u64), self.is_l(i - 1) && self.is_s(i));
         self.is_l(i - 1) && self.is_s(i)
+    }
+
+    pub fn next_lms_index(&self, i: usize) -> Option<usize> {
+        for k in i + 1..self.len() {
+            if self.is_lms(k) {
+                return Some(k);
+            }
+        }
+        None
     }
 
     pub fn len(&self) -> usize {
@@ -70,44 +88,34 @@ impl LS {
     }
 }
 
-pub fn iss<I>(s: &[I]) -> Vec<usize>
+pub fn iss_with_ls<I>(s: &[I], ls: &LS, max_symbol: usize) -> IntVector<usize>
 where
     I: Unsigned + Integer + NumCast + Copy,
 {
-    // We assume that all ascii numbers exist in the text, so we start counting at 256 for nonterminals
-    let mut symbol_cnt = 256 as usize;
-    // We can give the sentinel the same number in each iteration since it's always its own LMS-substring
-    // '\0' is recommended as a sentinel
-    let sentinel_n: usize = NumCast::from(s[s.len() - 1]).unwrap();
 
-    let ls = LS::new(s);
-
-    // naive sort ting
-    let lms_pos: Vec<usize> = lms_sort(s, &ls, symbol_cnt);
+    let lms_pos_unsorted = (0..ls.len()).filter(|&i| ls.is_lms(i)).collect::<Vec<_>>();
+    let lms_pos = lms_sort(s, &ls, max_symbol, &lms_pos_unsorted);
 
     lms_pos
 }
 
-fn naive_lms_sort<I>(s: &[I], ls: &LS) -> Vec<usize>
+pub fn iss<I>(s: &[I], max_symbol: usize) -> IntVector<usize>
 where
     I: Unsigned + Integer + NumCast + Copy,
 {
-    let lms_pos = (0..ls.len()).filter(|&i| ls.is_lms(i)).collect::<Vec<_>>();
-    let n = lms_pos.len();
-    let mut lms_pos_order = (0..lms_pos.len()).collect::<Vec<_>>();
-    lms_pos_order.sort_by(|&a, &b| {
-        let end_a = if a == n - 1 { a } else { a + 1 };
-        let end_b = if b == n - 1 { b } else { b + 1 };
-        s[lms_pos[a]..=lms_pos[end_a]].cmp(&s[lms_pos[b]..lms_pos[end_b]])
-    });
-    lms_pos_order.into_iter().map(|i| lms_pos[i]).collect()
+    let ls = LS::new(s);
+    iss_with_ls(s, &ls, max_symbol)
 }
 
-fn lms_sort<I>(s: &[I], ls: &LS, symbol_cnt: usize) -> Vec<usize>
+fn lms_sort<I>(s: &[I], ls: &LS, symbol_cnt: usize, lms_pos: &[usize]) -> IntVector<usize>
 where
     I: Unsigned + Integer + ToPrimitive + Copy,
 {
-    let size_bits = f64::log2(s.len() as f64 - 1.0).ceil() as usize;
+    let mut size_bits = f64::log2(s.len() as f64 - 1.0).ceil() as usize;
+    // You could run into problems if the max number in this bit width is contained in the input. If so, it interferes with checking for invalid values.
+    if size_bits < std::mem::size_of::<usize>() * 8 {
+        size_bits += 1;
+    }
     //let alphabet_bits = f64::log2(symbol_cnt as f64 - 1.0).ceil() as usize;
     let invalid = !(usize::MAX << size_bits);
     let mut bucket_store = IntVector::<usize>::with_fill(size_bits, s.len() as u64, invalid); //vec![usize::MAX; s.len()];
@@ -133,8 +141,6 @@ where
             .unzip::<usize, usize, Vec<_>, Vec<_>>();
         (Rank9::new(existing), bucket_start, bucket_end)
     };
-
-    let lms_pos = (0..ls.len()).filter(|&i| ls.is_lms(i)).collect::<Vec<_>>();
     // Schritt 0: Schreibe alle LMS Positionen an das ende ihres Blockes
     {
         // We're cloning this because we need the original later unfortunately
@@ -169,6 +175,7 @@ where
             continue;
         }
         let pos = bucket_store.get(r) - 1;
+        //dbg!(pos); // TODO Das hier geht iwie imme noch kaputt
         if ls.is_s(pos) {
             let c = s[pos].to_u64().unwrap();
             let c_pos = existing_chars.rank1(c) as usize - 1;
@@ -179,8 +186,10 @@ where
     drop(bucket_end);
     drop(existing_chars);
 
+    let mut res = IntVector::with_capacity(size_bits, lms_pos.len() as u64);
     bucket_store
         .into_iter()
         .filter(|&pos| ls.is_lms(pos))
-        .collect()
+        .for_each(|pos| res.push(pos));
+    res
 }
