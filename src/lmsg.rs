@@ -95,6 +95,8 @@ pub fn compress_multiple_raw(iterable: impl IntoIterator<Item = impl IntoIterato
             lms_index_map.insert(lms, i);
         }
         
+        // TODO unötiges Zeug droppen
+
         // Build a rank DS over the bv
         // This allows us to get the index of the corresponding rule for every lms substring.
         let same_lms_str_rank = Rank9::new(same_lms_str);
