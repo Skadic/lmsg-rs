@@ -9,10 +9,3 @@ edition = "2021"
 bitvec = "1.0.0"
 num = "0.4.0"
 succinct = "0.5.2"
-
-[dev-dependencies]
-criterion = "0.3"
-
-[[bench]]
-name = "iss_bench"
-harness = false
