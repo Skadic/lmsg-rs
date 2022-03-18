@@ -1,4 +1,4 @@
-use std::{fmt::Display, iter::Copied};
+use std::iter::Copied;
 
 use num::{cast::AsPrimitive, Integer, Unsigned};
 use succinct::{
@@ -141,18 +141,18 @@ where
     }
 }
 
-fn int_vector_it_provider<'a, I>(vec: &'a IntVector<I>) -> succinct::int_vec::Iter<'a, I>
+fn int_vector_it_provider<I>(vec: &IntVector<I>) -> succinct::int_vec::Iter<'_, I>
 where
     I: BlockType + Copy,
 {
     vec.iter()
 }
 
-fn slice_it_provider<'a, I, Iter>(slice: &'a [I]) -> Copied<std::slice::Iter<'a, I>>
+fn slice_it_provider<I, Iter>(slice: &[I]) -> Copied<std::slice::Iter<'_, I>>
 where
     I: Copy,
 {
-    slice.into_iter().copied()
+    slice.iter().copied()
 }
 
 pub fn iss<'a, Src, I>(s: &'a Src, max_symbol: usize) -> IntVector<usize>
@@ -242,7 +242,7 @@ where
     res
 }
 
-fn bucket_info<'a, Iter, I>(
+fn bucket_info<Iter, I>(
     s: Iter,
     symbol_cnt: usize,
     n: usize,

@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap};
+use std::cmp::Ordering;
 
 use crate::iss::{InducedSuffixSort, LS};
 
@@ -61,35 +61,14 @@ pub fn compress_raw(data: Vec<u8>) -> Vec<IntVector<usize>> {
         let rules_before = rules.len();
         let max_symbol = 256 + rules_before;
         let input_bits = (input.len() as f64 + 1.0).log2().ceil() as usize;
-        let invalid = !(usize::MAX << input_bits);
-        // Create DS
-        let ls = LS::from(&input);
-        let lms_pos = input.iss_with_ls(&ls, max_symbol); //crate::iss::iss::<IntVector<usize>, usize>(&input, max_symbol);
 
-        // The end indices (exclusive) of the lms substrings
-        let mut lms_substring_ends = IntVector::with_capacity(input_bits, lms_pos.len());
-        lms_pos
-            .iter()
-            .map(|v| ls.next_lms_index(v).unwrap_or(input.len() as usize - 1) + 1)
-            .for_each(|end| lms_substring_ends.push(end));
-        // Build a BitVector that is 1 if the ith and i-1th lms substrings are the same
-        let mut same_lms_str = BitVector::<u64>::with_capacity(lms_pos.len());
-        same_lms_str.push_bit(false);
-        for i in 0..lms_pos.len() - 1 {
-            same_lms_str.push_bit(
-                cmp_vec_range(
-                    &input,
-                    &input,
-                    lms_pos.get(i) as u64,
-                    lms_substring_ends.get(i) as u64,
-                    lms_pos.get(i + 1) as u64,
-                    lms_substring_ends.get(i + 1) as u64,
-                ) == Ordering::Equal,
-            );
-        }
+        // Get the start and end indices of the lms substrings and a bitvector that stores information about which lms substrings are the same
+        let (lms_substring_starts, lms_substring_ends, same_lms_str) =
+            calculate_lms_data(&input, max_symbol, input_bits);
 
+        // Generate rules from the lms substrings and add them to the rules vector. Return the amount of rules created
         let additional_rules = generate_rules(
-            &lms_pos,
+            &lms_substring_starts,
             lms_substring_ends.iter(),
             &same_lms_str,
             &mut rules,
@@ -97,57 +76,58 @@ pub fn compress_raw(data: Vec<u8>) -> Vec<IntVector<usize>> {
             max_symbol,
         );
         drop(lms_substring_ends);
-        drop(ls);
-        // We have new rules, therefore new characters and might need more bits to represent them
-        let symbol_bits = ((max_symbol + additional_rules) as f64).log2().ceil() as usize;
         // in this case, no new rules have been created. We are done
         if additional_rules == 0 {
             break;
         }
 
-        // In this case, we don't have enough bits to represent all new characters
-        // We need to reallocate input
-        if symbol_bits > input.element_bits() {
-            let mut new_input = IntVector::with_capacity(symbol_bits, input.len());
-            input.into_iter().for_each(|v| new_input.push(v));
-            input = new_input;
-        }
-
-        // A map that allows getting the index in lms_pos for every index that is an lms_pos
-        let mut lms_index_map = IntVector::<usize>::with_fill(input_bits, input.len() + 1, invalid);
-
-        for (i, lms) in lms_pos.iter().enumerate() {
-            lms_index_map.set(lms as u64, i);
-        }
-        drop(lms_pos);
-
-        // Build a rank DS over the bv
-        // This allows us to get the index of the corresponding rule for every lms substring.
-        let same_lms_str_rank = Rank9::new(same_lms_str);
-
-        let mut i = 0;
-        let mut new_len = 0;
-        while i < input.len() - 1 {
-            if lms_index_map.get(i) as usize != invalid {
-                // - 1 because rank "starts counting" at 1 instead of 0, and another -1 because we skip inserting the rule for the sentinel, since it's empty anyway
-                let rule_id =
-                    same_lms_str_rank.rank0(lms_index_map.get(i as u64) as u64) as usize - 1 - 1;
-                input.set(new_len, rule_id + rules_before + 256);
-                i += std::cmp::max(rules[rule_id].len(), 1);
-            } else {
-                input.set(new_len, input.get(i as u64));
-                i += 1;
-            }
-            new_len += 1;
-        }
-        // the sentinel
-        input.set(new_len, 0);
-        new_len += 1;
-        input.truncate(new_len);
+        input = ensure_representable(input, max_symbol + additional_rules);
+        replace_patterns(
+            &mut input,
+            same_lms_str,
+            lms_substring_starts,
+            &rules,
+            input_bits,
+            rules_before,
+        );
     }
     rules.push(input);
 
     rules
+}
+
+fn calculate_lms_data(
+    input: &IntVector<usize>,
+    max_symbol: usize,
+    input_bits: usize,
+) -> (IntVector, IntVector, BitVector<u64>) {
+    // Create DS
+    let ls = LS::from(input);
+    let lms_substring_starts = input.iss_with_ls(&ls, max_symbol);
+
+    // The end indices (exclusive) of the lms substrings
+    let mut lms_substring_ends = IntVector::with_capacity(input_bits, lms_substring_starts.len());
+    lms_substring_starts
+        .iter()
+        .map(|v| ls.next_lms_index(v).unwrap_or(input.len() as usize - 1) + 1)
+        .for_each(|end| lms_substring_ends.push(end));
+    drop(ls);
+    // Build a BitVector that is 1 if the ith and i-1th lms substrings are the same
+    let mut same_lms_str = BitVector::<u64>::with_capacity(lms_substring_starts.len());
+    same_lms_str.push_bit(false);
+    for i in 0..lms_substring_starts.len() - 1 {
+        same_lms_str.push_bit(
+            cmp_vec_range(
+                input,
+                input,
+                lms_substring_starts.get(i) as u64,
+                lms_substring_ends.get(i) as u64,
+                lms_substring_starts.get(i + 1) as u64,
+                lms_substring_ends.get(i + 1) as u64,
+            ) == Ordering::Equal,
+        );
+    }
+    (lms_substring_starts, lms_substring_ends, same_lms_str)
 }
 
 fn generate_rules<LmsInt, LmsIter, EndInt, EndIter, BlockT>(
@@ -164,7 +144,6 @@ where
     LmsIter::IntoIter: ExactSizeIterator,
     EndInt: Unsigned + Integer + BlockType + Copy + AsPrimitive<usize>,
     EndIter: IntoIterator<Item = EndInt>,
-    EndIter::IntoIter: ExactSizeIterator,
     BlockT: BlockType,
 {
     let lms_pos = lms_pos.into_iter();
@@ -206,4 +185,64 @@ where
         }
     }
     new_symbol_count
+}
+
+pub fn ensure_representable<B>(vec: IntVector<B>, max_symbol: B) -> IntVector<B>
+where
+    B: BlockType + AsPrimitive<f64>,
+{
+    // We have new rules, therefore new characters and might need more bits to represent them
+    let symbol_bits = max_symbol.as_().log2().ceil() as usize;
+
+    // In this case, we don't have enough bits to represent all new characters
+    // We need to reallocate input
+    if symbol_bits > vec.element_bits() {
+        let mut new_vec = IntVector::with_capacity(symbol_bits, vec.len());
+        vec.into_iter().for_each(|v| new_vec.push(v));
+        new_vec
+    } else {
+        vec
+    }
+}
+
+pub fn replace_patterns(
+    input: &mut IntVector<usize>,
+    same_lms_str: BitVector<u64>,
+    lms_pos: IntVector<impl BlockType + AsPrimitive<u64>>,
+    rules: &[IntVector<usize>],
+    input_bits: usize,
+    rule_count_before: usize,
+) {
+    let invalid = !(usize::MAX << input_bits);
+    // A map that allows getting the index in lms_pos for every index that is an lms_pos
+    let mut lms_index_map = IntVector::<usize>::with_fill(input_bits, input.len() + 1, invalid);
+
+    for (i, lms) in lms_pos.iter().enumerate() {
+        lms_index_map.set(lms.as_(), i);
+    }
+    drop(lms_pos);
+
+    // Build a rank DS over the bv
+    // This allows us to get the index of the corresponding rule for every lms substring.
+    let same_lms_str_rank = Rank9::new(same_lms_str);
+
+    let mut i = 0;
+    let mut new_len = 0;
+    while i < input.len() - 1 {
+        if lms_index_map.get(i) as usize != invalid {
+            // - 1 because rank "starts counting" at 1 instead of 0, and another -1 because we skip inserting the rule for the sentinel, since it's empty anyway
+            let rule_id =
+                same_lms_str_rank.rank0(lms_index_map.get(i as u64) as u64) as usize - 1 - 1;
+            input.set(new_len, rule_id + rule_count_before + 256);
+            i += std::cmp::max(rules[rule_id].len(), 1);
+        } else {
+            input.set(new_len, input.get(i as u64));
+            i += 1;
+        }
+        new_len += 1;
+    }
+    // the sentinel
+    input.set(new_len, 0);
+    new_len += 1;
+    input.truncate(new_len);
 }

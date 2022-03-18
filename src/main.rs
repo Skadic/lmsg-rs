@@ -4,16 +4,17 @@ pub mod lmsg;
 use std::time::Instant;
 
 fn main() {
-    let input = std::fs::read("res/dna.50MB").unwrap();
-    let input2 = b"gccttaacattattacgccta";
+    let input = std::fs::read("res/dna.50MB_prefix_1MB").unwrap();
+    let _input2 = b"gccttaacattattacgccta";
     let _input3 = b"gccttaacattattacgcctaagcfsadfsdfffsdfstaasdfcgacgtagctatcgtagctacgtactagt";
 
     let now = Instant::now();
-    let rules = lmsg::compress_raw(input);
+    let _rules = lmsg::compress_raw(input);
     //print_rules(rules.iter());
     println!("{}ms", now.elapsed().as_millis())
 }
 
+#[allow(dead_code)]
 fn print_rules(rules: impl IntoIterator<Item = impl IntoIterator<Item = usize>>) {
     for (i, rule) in rules.into_iter().enumerate() {
         let rhs = rule
