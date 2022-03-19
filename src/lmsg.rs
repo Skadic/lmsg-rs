@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::iss::{InducedSuffixSort, LS};
+use crate::iss::LS;
 
 use num::{cast::AsPrimitive, Integer, Unsigned};
 use succinct::{
@@ -103,7 +103,7 @@ fn calculate_lms_data(
 ) -> (IntVector, IntVector, BitVector<u64>) {
     // Create DS
     let ls = LS::from(input);
-    let lms_substring_starts = input.iss_with_ls(&ls, max_symbol);
+    let lms_substring_starts = crate::iss::iss(input, &ls, max_symbol);
 
     // The end indices (exclusive) of the lms substrings
     let mut lms_substring_ends = IntVector::with_capacity(input_bits, lms_substring_starts.len());

@@ -1,5 +1,3 @@
-use std::iter::Copied;
-
 use num::{cast::AsPrimitive, Integer, Unsigned};
 use succinct::{
     rank::BitRankSupport, storage::BlockType, BitVec, BitVecMut, BitVector, IntVec, IntVecMut,
@@ -105,78 +103,17 @@ impl<B: BlockType + Unsigned + Integer> From<&IntVector<B>> for LS {
     }
 }
 
-pub trait InducedSuffixSort {
-    fn iss_with_ls(&self, ls: &LS, max_symbol: usize) -> IntVector<usize>;
+pub fn iss(vec: &IntVector<usize>, ls: &LS, max_symbol: usize) -> IntVector<usize> {
+    let lms_pos_unsorted = (0..ls.len()).filter(|&i| ls.is_lms(i)).collect::<Vec<_>>();
+    lms_sort(vec, ls, max_symbol, &lms_pos_unsorted)
 }
 
-impl<I> InducedSuffixSort for &[I]
-where
-    I: Unsigned + Integer + Copy + AsPrimitive<u64>,
-{
-    fn iss_with_ls(&self, ls: &LS, max_symbol: usize) -> IntVector<usize> {
-        let lms_pos_unsorted = (0..ls.len()).filter(|&i| ls.is_lms(i)).collect::<Vec<_>>();
-        lms_sort(
-            *self,
-            ls,
-            max_symbol,
-            &lms_pos_unsorted,
-            slice_it_provider::<I, Copied<std::slice::Iter<'_, I>>>,
-        )
-    }
-}
-
-impl<I> InducedSuffixSort for IntVector<I>
-where
-    I: Unsigned + Integer + Copy + AsPrimitive<u64> + BlockType,
-{
-    fn iss_with_ls(&self, ls: &LS, max_symbol: usize) -> IntVector<usize> {
-        let lms_pos_unsorted = (0..ls.len()).filter(|&i| ls.is_lms(i)).collect::<Vec<_>>();
-        lms_sort(
-            self,
-            ls,
-            max_symbol,
-            &lms_pos_unsorted,
-            int_vector_it_provider,
-        )
-    }
-}
-
-fn int_vector_it_provider<I>(vec: &IntVector<I>) -> succinct::int_vec::Iter<'_, I>
-where
-    I: BlockType + Copy,
-{
-    vec.iter()
-}
-
-fn slice_it_provider<I, Iter>(slice: &[I]) -> Copied<std::slice::Iter<'_, I>>
-where
-    I: Copy,
-{
-    slice.iter().copied()
-}
-
-pub fn iss<'a, Src, I>(s: &'a Src, max_symbol: usize) -> IntVector<usize>
-where
-    Src: InducedSuffixSort,
-    LS: From<&'a Src>,
-    I: Unsigned + Integer + Copy + AsPrimitive<u64>,
-{
-    let ls = LS::from(s);
-    s.iss_with_ls(&ls, max_symbol)
-}
-
-fn lms_sort<'a, Src, I, Iter>(
-    s: &'a Src,
+fn lms_sort(
+    s: &IntVector<usize>,
     ls: &LS,
     symbol_cnt: usize,
     lms_pos: &[usize],
-    it_provider: fn(&'a Src) -> Iter,
-) -> IntVector<usize>
-where
-    I: Unsigned + Integer + Copy + AsPrimitive<u64>,
-    Src: 'a + Access<Item = I> + ?Sized,
-    Iter: Iterator<Item = I> + ExactSizeIterator,
-{
+) -> IntVector<usize> {
     let mut size_bits = f64::log2(ls.len() as f64 - 1.0).ceil() as usize;
     // You could run into problems if the max number in this bit width is contained in the input. If so, it interferes with checking for invalid values.
     if size_bits < std::mem::size_of::<usize>() * 8 {
@@ -188,15 +125,14 @@ where
     // Calculate the buckets for the chars in the alphabet
     // The bitvector has a 1 at each index for which there is a nonzero-sized bucket. It also uses a rankDS (Vigna 2020)
     // Subsequently, bucket_start and bucket_end only save data for chars that actually appear in the text.
-    let (existing_chars, mut bucket_start, mut bucket_end) =
-        bucket_info(it_provider(s), symbol_cnt, ls.len());
+    let (existing_chars, mut bucket_start, mut bucket_end) = bucket_info(s, symbol_cnt);
     // Schritt 0: Schreibe alle LMS Positionen an das ende ihres Blockes
     {
         // We're cloning this because we need the original later unfortunately
         let mut bucket_end = bucket_end.clone();
         // Iterate through the lms positions in reverse
         for &pos in lms_pos.iter().rev() {
-            let c = s.access(pos).as_();
+            let c = s.get(pos as u64).as_();
             let c_pos = existing_chars.rank1(c) - 1;
             bucket_store.set(bucket_end.get(c_pos) as u64 - 1, pos);
             bucket_end.set(c_pos, bucket_end.get(c_pos) - 1);
@@ -210,7 +146,7 @@ where
         }
         let pos = bucket_store.get(r) - 1;
         if ls.is_l(pos) {
-            let c = s.access(pos).as_();
+            let c = s.get(pos as u64).as_();
             let c_pos = existing_chars.rank1(c) - 1;
             bucket_store.set(bucket_start.get(c_pos) as u64, pos);
             bucket_start.set(c_pos, bucket_start.get(c_pos) + 1);
@@ -225,7 +161,7 @@ where
         }
         let pos = bucket_store.get(r) - 1;
         if ls.is_s(pos) {
-            let c = s.access(pos).as_();
+            let c = s.get(pos as u64).as_();
             let c_pos = existing_chars.rank1(c) - 1;
             bucket_store.set(bucket_end.get(c_pos) as u64 - 1, pos);
             bucket_end.set(c_pos, bucket_end.get(c_pos) - 1);
@@ -242,16 +178,12 @@ where
     res
 }
 
-fn bucket_info<Iter, I>(
-    s: Iter,
+fn bucket_info(
+    s: &IntVector<usize>,
     symbol_cnt: usize,
-    n: usize,
-) -> (Rank9<BitVector<u64>>, IntVector<usize>, IntVector<usize>)
-where
-    Iter: IntoIterator<Item = I>,
-    I: AsPrimitive<u64>,
-{
+) -> (Rank9<BitVector<u64>>, IntVector<usize>, IntVector<usize>) {
     let s = s.into_iter();
+    let n = s.len();
     let bits = (n as f64 + 1.0).log2().ceil() as usize;
     let mut bucket_sizes = IntVector::<usize>::with_fill(bits, symbol_cnt as u64, 0);
     let mut existing = BitVector::<u64>::with_fill(symbol_cnt as u64, false);
@@ -278,64 +210,4 @@ where
             bucket_end.push(end);
         });
     (existing, bucket_start, bucket_end)
-}
-
-pub trait Access {
-    type Item;
-    fn access(&self, i: usize) -> Self::Item;
-}
-
-impl<T> Access for Vec<T>
-where
-    T: Copy,
-{
-    type Item = T;
-
-    fn access(&self, i: usize) -> Self::Item {
-        self[i]
-    }
-}
-
-impl<T> Access for &[T]
-where
-    T: Copy,
-{
-    type Item = T;
-
-    fn access(&self, i: usize) -> Self::Item {
-        self[i]
-    }
-}
-
-impl<T> Access for [T]
-where
-    T: Copy,
-{
-    type Item = T;
-
-    fn access(&self, i: usize) -> Self::Item {
-        self[i]
-    }
-}
-
-impl<I> Access for IntVector<I>
-where
-    I: BlockType + Copy,
-{
-    type Item = I;
-
-    fn access(&self, i: usize) -> Self::Item {
-        self.get(i as u64)
-    }
-}
-
-impl<I> Access for &IntVector<I>
-where
-    I: BlockType + Copy,
-{
-    type Item = I;
-
-    fn access(&self, i: usize) -> Self::Item {
-        self.get(i as u64)
-    }
 }

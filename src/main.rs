@@ -5,12 +5,13 @@ use std::time::Instant;
 
 fn main() {
     let input = std::fs::read("res/dna.50MB_prefix_1MB").unwrap();
-    let _input2 = b"gccttaacattattacgccta";
-    let _input3 = b"gccttaacattattacgcctaagcfsadfsdfffsdfstaasdfcgacgtagctatcgtagctacgtactagt";
+    let _input2 = "gccttaacattattacgccta".to_owned();
+    let _input3 =
+        "gccttaacattattacgcctaagcfsadfsdfffsdfstaasdfcgacgtagctatcgtagctacgtactagt".to_owned();
 
     let now = Instant::now();
-    let _rules = lmsg::compress_raw(input);
-    //print_rules(rules.iter());
+    let _rules = lmsg::compress(_input2);
+    print_rules(_rules.iter());
     println!("{}ms", now.elapsed().as_millis())
 }
 
@@ -36,3 +37,5 @@ fn print_rules(rules: impl IntoIterator<Item = impl IntoIterator<Item = usize>>)
         println!("R{i} -> {rhs}");
     }
 }
+
+// gccttaacattattacgccta
